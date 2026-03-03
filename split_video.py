@@ -6,7 +6,7 @@ import math
 ### CONFIGURATION
 DRIVE_LINK = "https://drive.google.com/file/d/1igBVolFaFbOaQvGtsOhxWf1Y4ESQMgh7/view?usp=drive_link"
 DOWNLOADED_VIDEO_NAME = "Road traffic video for object recognition.mp4"
-SPLIT_TIME_SECONDS = 120
+SPLIT_TIME_SECONDS = 10
 
 """
 Note for future self: 
@@ -86,18 +86,20 @@ def split_video(video_name:str, segment_length_seconds:int=120):
     segments_dir = os.path.join("Downloads", "Segments")
 
     for i in range(total_segments):
-        start_time = i * segment_length_seconds
-        # Make sure the end time doesn't exceed the total duration
-        end_time = min((i + 1) * segment_length_seconds, total_duration)
+        if i <= 2:
+            start_time = i * segment_length_seconds
+            # Make sure the end time doesn't exceed the total duration
+            end_time = min((i + 1) * segment_length_seconds, total_duration)
 
-        output_name = f"{base_name}_part_{i + 1}.mp4"
-        output_path = os.path.join(segments_dir, output_name)
-        print(f"Exporting {output_path} (From {start_time}s to {end_time}s)...")
+            output_name = f"{base_name}_part_{i + 1}.mp4"
+            output_path = os.path.join(segments_dir, output_name)
+            print(f"Exporting {output_path} (From {start_time}s to {end_time}s)...")
 
-        # Create a subclip and write it to a file
-        clip = video.subclipped(start_time, end_time)
-        clip.write_videofile(output_path, codec="libx264", audio_codec="aac", logger=None)
-
+            # Create a subclip and write it to a file
+            clip = video.subclipped(start_time, end_time)
+            clip.write_videofile(output_path, codec="libx264", audio_codec="aac", logger=None)
+        else:
+            break
     # Close the video file to free up system resources
     video.close()
     print("Video splitting complete!")
