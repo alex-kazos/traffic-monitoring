@@ -240,16 +240,16 @@ def update_tripwire(tripwire:dict, tracked_vehicles:dict, current_frame:int)->No
         current_frame (int): The current frame index in the video.
     """
     # For each tracked vehicle, check if it has crossed the first line and then the second line.
-    for track_id, (_, curret_position_y) in tracked_vehicles.items():
+    for track_id, (_, current_position_y) in tracked_vehicles.items():
         prev = tripwire["prev_y"].get(track_id)
-        tripwire["prev_y"][track_id] = curret_position_y
+        tripwire["prev_y"][track_id] = current_position_y
         if prev is None:
             continue
         if track_id not in tripwire["crossed_first"]:
-            if crossed_line_check(prev, curret_position_y, tripwire["line_first_y"]):
+            if crossed_line_check(prev, current_position_y, tripwire["line_first_y"]):
                 tripwire["crossed_first"][track_id] = current_frame
         elif track_id not in tripwire["speed"]:
-            if crossed_line_check(prev, curret_position_y, tripwire["line_second_y"]):
+            if crossed_line_check(prev, current_position_y, tripwire["line_second_y"]):
                 elapsed = (current_frame - tripwire["crossed_first"][track_id]) / FPS
                 if elapsed > 0:
                     tripwire["speed"][track_id] = (tripwire["dist_m"] / elapsed) * 3.6
@@ -392,7 +392,7 @@ def main():
                 rect = min(rects_side,
                            key=lambda r: abs(current_position_x - (r[0] + r[2] // 2)) + abs(current_position_y - (r[1] + r[3])))
                 rect_x, rect_y, rect_w, rect_h = rect
-                speed_tripwire = tripwire["tracking_speed"].get(tracker_id)
+                speed_tripwire = tripwire["speed"].get(tracker_id)
                 speed_bev  = bev_speed.get(key)
                 if speed_tripwire is not None:
                     speed_label = f"{int(speed_tripwire)} km/h"
@@ -420,7 +420,7 @@ def main():
     video_writer.release()
 
     # CSV export // alerts must be while processing the script.
-    with open(CSV_PATH, "frame_width", newline="") as f:
+    with open(CSV_PATH, "w", newline="") as f:
         wr = csv.writer(f)
         wr.writerow(["vehicle_id", "carriageway", "vehicle_type", "speed_kmh", "speed_source"])
         # Combine the tripwire and BEV tracking_speed data and include all seen tracker IDs from both sources and vehicle type classifications.
@@ -428,14 +428,14 @@ def main():
                                            ("R", tripwire_right, "right")]:
             # union ids
             seen_track_ids = (
-                set(tripwire["tracking_speed"])
+                set(tripwire["speed"])
                 | {tracker_id for (s, tracker_id) in vehicle_type if s == side}
                 | {tracker_id for (s, tracker_id) in bev_speed if s == side}
             )
             # Sort by tracker ID for consistent output
             for tracker_id in sorted(seen_track_ids):
                 key      = (side, tracker_id)
-                speed_tripwire = tripwire["tracking_speed"].get(tracker_id)
+                speed_tripwire = tripwire["speed"].get(tracker_id)
                 speed_bev  = bev_speed.get(key)
                 if speed_tripwire is not None:
                     tracking_speed, tracking_source = speed_tripwire, "tripwire"
@@ -452,14 +452,14 @@ def main():
 
 
     # (DISABLED) Summary output - for testing purposes, we can print some summary stats here about the number of vehicles tracked via tripwire vs BEV fallback vs no tracking_speed.
-    # n_trip = sum(len(tw["tracking_speed"]) for tw in (tripwire_left, tripwire_right))
+    # n_trip = sum(len(tw["speed"]) for tw in (tripwire_left, tripwire_right))
     # n_bev  = sum(
     #     1 for (s, tracker_id) in bev_speed
-    #     if (s == "L" and tracker_id not in tripwire_left["tracking_speed"])
-    #     or (s == "R" and tracker_id not in tripwire_right["tracking_speed"])
+    #     if (s == "L" and tracker_id not in tripwire_left["speed"])
+    #     or (s == "R" and tracker_id not in tripwire_right["speed"])
     # )
     # all_seen = (
-    #         {("L", t) for t in tripwire_left["tracking_speed"]} | {("R", t) for t in tripwire_right["tracking_speed"]}
+    #         {("L", t) for t in tripwire_left["speed"]} | {("R", t) for t in tripwire_right["speed"]}
     #         | set(vehicle_type) | set(bev_speed)
     # )
 
