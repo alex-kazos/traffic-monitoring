@@ -29,10 +29,10 @@ def download_from_drive(drive_url:str, output_filename:str):
     print(f"Downloading video from Google Drive...")
 
     # Create a directory to store the downloaded file
-    if not os.path.exists("Downloads"):
-        os.mkdir("Downloads")
+    if not os.path.exists("../Downloads"):
+        os.mkdir("../Downloads")
 
-    output_path = os.path.join("Downloads", output_filename)
+    output_path = os.path.join("../Downloads", output_filename)
 
     try:
         # Extract the unique file ID from the full URL
@@ -58,13 +58,13 @@ def split_video(video_name:str, segment_length_seconds:int=120):
     Parameters
     ----------
     video_name : str
-        The name of the video file to split (including extension).
+        The name of the video file to Split (including extension).
     segment_length_seconds : int
         The length of each segment in seconds. Default is 120 seconds (2 minutes).
 
     """
     # Configure paths
-    video_path = os.path.join("Downloads", video_name)
+    video_path = os.path.join("../Downloads", video_name)
 
     print(f"Loading video: {video_path}")
     video = VideoFileClip(video_path)
@@ -79,11 +79,11 @@ def split_video(video_name:str, segment_length_seconds:int=120):
     base_name = os.path.splitext(os.path.basename(video_path))[0]
 
     # Create a directory to store the Segments files
-    if not os.path.exists("Downloads/Segments"):
-        os.mkdir("Downloads/Segments")
+    if not os.path.exists("../Downloads/Segments"):
+        os.mkdir("../Downloads/Segments")
 
     # Ensure the output directory `Downloads/Segments` exists
-    segments_dir = os.path.join("Downloads", "Segments")
+    segments_dir = os.path.join("../Downloads", "Segments")
 
     for i in range(total_segments):
         if i <= 2:

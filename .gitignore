@@ -4,7 +4,7 @@
 *.json
 
 # Ignore the model
-yolov8x.pt
+Other/yolov8x.pt
 
 # Ignore all files under Dowloads directory
 Downloads/*

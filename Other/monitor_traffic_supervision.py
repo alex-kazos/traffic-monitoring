@@ -12,8 +12,8 @@ from collections import defaultdict, deque
 
 # -- Paths -------------------------------------------------------------------
 VIDEO_NAME  = "Road traffic video for object recognition_part_1.mp4"
-OUTPUT_PATH = "traffic_speed_output_supervision.mp4"       # annotated output video
-CSV_PATH    = "vehicle_speeds_supervision.csv"        # per-vehicle speed report
+OUTPUT_PATH = "../traffic_speed_output_supervision.mp4"  # annotated output video
+CSV_PATH    = "../vehicle_speeds_supervision.csv"  # per-vehicle speed report
 
 # -- YOLO class IDs (COCO dataset) -------------------------------------------
 # 2 = car, 3 = motorcycle, 5 = bus, 7 = truck
@@ -284,10 +284,10 @@ def main() -> None:
     """
     # -- Load YOLO model ------------------------------------------------------
     print("Loading YOLO model...")
-    model = YOLO("yolov8x.pt")
+    model = YOLO("Other/yolov8x.pt")
 
     # -- Open video via Supervision -------------------------------------------
-    video_path = os.path.join("Downloads", "Segments", VIDEO_NAME)
+    video_path = os.path.join("../Downloads", "Segments", VIDEO_NAME)
     video_info = sv.VideoInfo.from_video_path(video_path)
     fps = video_info.fps
     total_frames = video_info.total_frames or 0

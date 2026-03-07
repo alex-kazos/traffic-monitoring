@@ -8,11 +8,9 @@ from collections import (
     deque
 )
 
-from sympy import false
-
 ## Temp set-up for provided video (paths will be adjusted for final testing)
 
-VIDEO_PATH  = os.path.join("Downloads", "Segments",
+VIDEO_PATH  = os.path.join("../Downloads", "Segments",
                            "Road traffic video for object recognition_part_1.mp4")
 OUTPUT_PATH = "traffic_speed_output.mp4"
 CSV_PATH    = "vehicle_speeds.csv"
@@ -312,7 +310,7 @@ def main():
         foreground = cv2.morphologyEx(foreground, cv2.MORPH_CLOSE, kernel_medium)
         foreground = cv2.dilate(foreground, kernel_large)
 
-        # Detections split by carriageway
+        # Detections Split by carriageway
         centroids, _ = cv2.findContours(foreground, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         all_bounding_rect = [cv2.boundingRect(c) for c in centroids if cv2.contourArea(c) >= MIN_AREA]
