@@ -26,6 +26,10 @@ To build the project's Docker containers for the `Split` and `Tracking` environm
 .\start_docker.bat
 ```
 
+### Dockerhub
+
+The docker image is at: https://hub.docker.com/r/giorgoskalesiakis/traffic-monitoring/tags
+
 ## Usage
 
 Simply execute the target monitoring script you wish to evaluate. It will load the defined video paths, compute telemetry on every frame, and push reports dynamically.
