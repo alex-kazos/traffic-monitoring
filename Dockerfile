@@ -7,4 +7,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD ["python", "Tracking/monitor_traffic.py"]
+CMD ["python", "monitor_traffic.py"]
