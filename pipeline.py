@@ -223,6 +223,7 @@ def run_pipeline(video_path: str, csv_path: str) -> None:
 
     with open(csv_path, "w", newline="") as f:
         wr = csv.writer(f)
+        # column names
         wr.writerow(["vehicle_id", "carriageway", "vehicle_type", "speed_kmh", "speed_source"])
         for side, tripwire, side_label in [
             ("L", tripwire_left, "left"),
@@ -244,11 +245,11 @@ def run_pipeline(video_path: str, csv_path: str) -> None:
                 else:
                     tracking_speed, tracking_source = None, "none"
                 wr.writerow([
-                    f"{side}{tracker_id}",
-                    side_label,
-                    vehicle_type.get(key, "unknown"),
-                    f"{tracking_speed:.1f}" if tracking_speed is not None else "",
-                    tracking_source,
+                    f"{side}{tracker_id}", # vehicle_id
+                    side_label, # carriageway
+                    vehicle_type.get(key, "unknown"), # vehicle_type
+                    f"{tracking_speed:.1f}" if tracking_speed is not None else "", # speed_kmh
+                    tracking_source, # speed_source
                 ])
 
     logging.info("Wrote CSV: %s", os.path.abspath(csv_path))

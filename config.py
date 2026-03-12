@@ -10,6 +10,12 @@ AZURE_STORAGE_CONNECTION_STRING = os.environ.get("AZURE_STORAGE_CONNECTION_STRIN
 AZURE_STORAGE_CONTAINER_NAME = os.environ.get("AZURE_STORAGE_CONTAINER_NAME", "").strip()
 BLOB_VIDEO_FOLDER = "road_traffic"
 
+# ----- Azure SQL Database -----
+AZURE_SQL_SERVER_NAME = os.environ.get("AZURE_SQL_SERVER_NAME")
+AZURE_SQL_DATABASE_NAME = os.environ.get("AZURE_SQL_DATABASE_NAME")
+AZURE_SQL_USER_NAME = os.environ.get("AZURE_SQL_USER_NAME")
+AZURE_SQL_PASSWORD = os.environ.get("AZURE_SQL_PASSWORD")
+
 # ----- Local fallback -----
 VIDEO_PATH = os.path.join(
     "../Downloads", "Segments",
