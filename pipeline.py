@@ -281,5 +281,5 @@ def run_pipeline(video_path: str, csv_path: str) -> None:
     conn.commit()
     logging.info("Inserted vehicle speeds to database")
     cursor.close()
-    conn.close()
+    conn.close() ## yes this will run as many times as the number of videos in the blob storage. It can be optimized to run only once.
     logging.info("Closed database connection")
