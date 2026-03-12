@@ -8,7 +8,7 @@ import numpy as np
 import cv2  # type: ignore[import-untyped]
 from collections import defaultdict, deque
 import pyodbc
-
+import re
 
 from config import (
     FPS,
@@ -159,6 +159,11 @@ def run_pipeline(video_path: str, csv_path: str) -> None:
     total_frames = int(capture_video.get(cv2.CAP_PROP_FRAME_COUNT))
     logging.info("Video %s: %dx%d, %d frames", video_path, frame_width, frame_height, total_frames)
 
+    # Extract segment ID
+    part_match = re.search(r"_part_(\d+)", os.path.basename(video_path))
+    segment_id = f"{int(part_match.group(1)):03d}" if part_match else "000"
+    segment_id = int(segment_id)
+
     background = cv2.createBackgroundSubtractorMOG2(history=150, varThreshold=40, detectShadows=True)
     kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     kernel_medium = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
@@ -172,6 +177,7 @@ def run_pipeline(video_path: str, csv_path: str) -> None:
     vehicle_type = {}
     bev_hist = defaultdict(lambda: deque(maxlen=BEV_WINDOW))
     bev_speed = {}
+    entry_frame = {}
 
     for frame_id in range(1, total_frames + 1):
         result, frame = capture_video.read()
@@ -191,6 +197,16 @@ def run_pipeline(video_path: str, csv_path: str) -> None:
 
         active_left = update_tracker(tracker_left, rects_left)
         active_right = update_tracker(tracker_right, rects_right)
+
+        for tracker_id in active_left:
+            key = ("L", tracker_id)
+            if key not in entry_frame:
+                entry_frame[key] = frame_id
+        for tracker_id in active_right:
+            key = ("R", tracker_id)
+            if key not in entry_frame:
+                entry_frame[key] = frame_id
+
         update_tripwire(tripwire_left, active_left, frame_id)
         update_tripwire(tripwire_right, active_right, frame_id)
 
@@ -227,6 +243,7 @@ def run_pipeline(video_path: str, csv_path: str) -> None:
     conn = pyodbc.connect(connection_string)
     cursor = conn.cursor()
 
+    ## Comment: added null to speed_source, if speed is nullable, speed_source should be nullable too.
     cursor.execute("""
     IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'vehicle_speeds')
     BEGIN
@@ -236,7 +253,10 @@ def run_pipeline(video_path: str, csv_path: str) -> None:
             carriageway VARCHAR(200) NOT NULL,
             vehicle_type VARCHAR(200) NOT NULL,
             speed_kmh FLOAT NULL,
-            speed_source VARCHAR(200) NOT NULL
+            speed_source VARCHAR(200) NULL,
+            entry_frame INT NOT NULL,
+            total_frames INT NOT NULL,
+            segment_id INT NOT NULL
         );
     END
     """)
@@ -262,11 +282,12 @@ def run_pipeline(video_path: str, csv_path: str) -> None:
                 tracking_speed, tracking_source = speed_bev, "bev_avg"
             else:
                 tracking_speed, tracking_source = None, "none"
+            entry_ts = entry_frame.get(key)
 
             vehicle_id = f"{side}{tracker_id}"
             cursor.execute(
                 """
-                INSERT INTO vehicle_speeds (vehicle_id, carriageway, vehicle_type, speed_kmh, speed_source)
+                INSERT INTO vehicle_speeds (vehicle_id, carriageway, vehicle_type, speed_kmh, speed_source,entry_ts,total_frames,segment_id)
                 VALUES (?, ?, ?, ?, ?)
                 """,
                 (
