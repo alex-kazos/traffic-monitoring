@@ -1,67 +1,77 @@
 import os
 import csv
+import re
+
+
 import cv2
 import time
 import numpy as np
-from collections import (
-    defaultdict,
-    deque
-)
+from concurrent.futures import ThreadPoolExecutor
+from collections import defaultdict, deque
 
 ## Temp set-up for provided video (paths will be adjusted for final testing)
 
-VIDEO_PATH  = os.path.join("../Downloads", "Segments",
-                           "Road traffic video for object recognition_part_1.mp4")
-OUTPUT_PATH = "traffic_speed_output.mp4"
-CSV_PATH    = "vehicle_speeds.csv"
+# VIDEO_PATH  = os.path.join("../Downloads", "Segments",
+#                            "Road traffic video for object recognition_part_1.mp4")
+# OUTPUT_PATH  = os.path.join("../Downloads", "Processed",
+#                         "traffic_speed_output.mp4"
+#                             )
+# CSV_PATH  = os.path.join("../Downloads", "Data",
+#                         "vehicle_speeds.csv"
+#                             )
+
+VIDEO_PATH = "../Downloads/Segments"
+OUTPUT_PATH = "../Downloads/Processed"
+CSV_PATH = "../Downloads/Data"
 
 
 # ----- VARIABLES ----------
 
-FPS            = 25.0
-MIN_AREA       = 1_500
+FPS = 25.0
+MIN_AREA = 1_500
 TRUCK_MIN_AREA = 9_000
-MAX_LOST       = 12
-MAX_DIST       = 150
+MAX_LOST = 12
+MAX_DIST = 150
 
-BEV_WINDOW     = 8
+BEV_WINDOW = 8
 BEV_MIN_FRAMES = 7
-BEV_SPD_MIN    = 5.0
-BEV_SPD_MAX    = 150.0   # UK motorway cap (km/h)
+BEV_SPD_MIN = 5.0
+BEV_SPD_MAX = 150.0  # UK motorway cap (km/h)
 
-#Used for splitting detections into left vs right carriageway (based on bottom-center point)
+# Used for splitting detections into left vs right carriageway (based on bottom-center point)
 SPLIT_X = 640
 
 # TRIPWIRE LINES
 
-LINE_1_Y = 400   # upper green line
-LINE_2_Y = 560   # lower green line
+LINE_1_Y = 400  # upper green line
+LINE_2_Y = 560  # lower green line
 
 # (10%) Perspective Calibration
 
 # Start of left side tripwire (line 2), end of left side tripwire (line 1)
-SOURCE_L = np.array([
-    [490, 295], # top left
-    [640, 295], # top right
-    [640, 700], # bottom right
-    [ 20, 700]  # bottom left
-],dtype=np.float32)
+SOURCE_L = np.array(
+    [
+        [490, 295],  # top left
+        [640, 295],  # top right
+        [640, 700],  # bottom right
+        [20, 700],  # bottom left
+    ],
+    dtype=np.float32,
+)
 
 # Start of right side tripwire (line 1), end of right side tripwire (line 2)
-SOURCE_R = np.array([
-    [640, 295],  # top left
-    [790, 295],  # top right
-    [1260, 700], # bottom right
-    [640, 700]   # bottom left
-], dtype=np.float32)
+SOURCE_R = np.array(
+    [
+        [640, 295],  # top left
+        [790, 295],  # top right
+        [1260, 700],  # bottom right
+        [640, 700],  # bottom left
+    ],
+    dtype=np.float32,
+)
 
 # The target Horizon
-TARGET_H = np.array([
-    [  0,   0],
-    [ 14,   0],
-    [ 14, 102],
-    [  0, 102]
-], dtype=np.float32)
+TARGET_H = np.array([[0, 0], [14, 0], [14, 102], [0, 102]], dtype=np.float32)
 
 # Perspective transform matrices for left and right sides
 PERSPECT_L = cv2.getPerspectiveTransform(SOURCE_L, TARGET_H)
@@ -70,22 +80,20 @@ PERSPECT_R = cv2.getPerspectiveTransform(SOURCE_R, TARGET_H)
 
 # ----- FUNCTIONS ----------
 
-def bev_calculation(pix_x:int, pix_y:int, perspective_array)->float:
+
+def bev_calculation(pix_x: int, pix_y: int, perspective_array) -> float:
     """
     Calculate the Bird's Eye View (BEV) Y-coordinate in real-world meters.
-    
+
     Args:
         pix_x (int): The x-coordinate in pixels.
         pix_y (int): The y-coordinate in pixels.
         perspective_array (numpy.ndarray): The 3x3 perspective transformation matrix.
-        
+
     Returns:
         float: The BEV y-coordinate in meters.
     """
-    input_point = np.array([
-        [[float(pix_x),
-          float(pix_y)]
-         ]], dtype=np.float32)
+    input_point = np.array([[[float(pix_x), float(pix_y)]]], dtype=np.float32)
 
     bev = float(cv2.perspectiveTransform(input_point, perspective_array)[0, 0, 1])
 
@@ -93,14 +101,20 @@ def bev_calculation(pix_x:int, pix_y:int, perspective_array)->float:
 
 
 # Distance calculate for left & right tripwires
-DIST_L = abs(bev_calculation(320, LINE_1_Y, PERSPECT_L) - bev_calculation(320, LINE_2_Y, PERSPECT_L))
-DIST_R = abs(bev_calculation(960, LINE_1_Y, PERSPECT_R) - bev_calculation(960, LINE_2_Y, PERSPECT_R))
+DIST_L = abs(
+    bev_calculation(320, LINE_1_Y, PERSPECT_L)
+    - bev_calculation(320, LINE_2_Y, PERSPECT_L)
+)
+DIST_R = abs(
+    bev_calculation(960, LINE_1_Y, PERSPECT_R)
+    - bev_calculation(960, LINE_2_Y, PERSPECT_R)
+)
 
 
-def initialize_tracker()->dict:
+def initialize_tracker() -> dict:
     """
     Initialize a new tracker state dictionary.
-    
+
     Returns:
         tracker_dict (dict): A dictionary containing next track ID, centroids, and lost frame counts.
     """
@@ -109,17 +123,17 @@ def initialize_tracker()->dict:
     return tracker_dict
 
 
-def update_tracker(tracker:dict, bounding_box:list)->dict:
+def update_tracker(tracker: dict, bounding_box: list) -> dict:
     """
     Update the tracker state with new bounding box detections for a frame.
-    
+
     Matches new detections to existing tracks using Euclidean distance.
     Unmatched tracks are marked lost and removed if lost for too many frames.
-    
+
     Args:
         tracker (dict): The tracker state dictionary.
         bounding_box (list of tuples): List of bounding boxes (x, y, w, h).
-        
+
     Returns:
         centroids_dict (dict): The updated active centroids mapping (track ID -> (x, y)).
     """
@@ -135,14 +149,15 @@ def update_tracker(tracker:dict, bounding_box:list)->dict:
         for track_id in list(centroids):
             lost[track_id] += 1
             if lost[track_id] > MAX_LOST:
-                del centroids[track_id]; del lost[track_id]
+                del centroids[track_id]
+                del lost[track_id]
         return dict(centroids)
 
     # If no existing tracks, initialize new tracks for all detections
     if not centroids:
         for point in new_points:
             centroids[tracker["next_id"]] = point
-            lost[tracker["next_id"]]  = 0
+            lost[tracker["next_id"]] = 0
             tracker["next_id"] += 1
         return dict(centroids)
 
@@ -150,10 +165,16 @@ def update_tracker(tracker:dict, bounding_box:list)->dict:
     existing_ids = list(centroids)
     existing_points = [centroids[i] for i in existing_ids]
     dist = np.linalg.norm(
-        np.array(existing_points)[:, None] - np.array(new_points)[None, :], axis=-1)
-    pairs  = sorted(
-        [(dist[i, j], i, j) for i in range(len(existing_points)) for j in range(len(new_points))],
-        key=lambda x: x[0])
+        np.array(existing_points)[:, None] - np.array(new_points)[None, :], axis=-1
+    )
+    pairs = sorted(
+        [
+            (dist[i, j], i, j)
+            for i in range(len(existing_points))
+            for j in range(len(new_points))
+        ],
+        key=lambda x: x[0],
+    )
 
     existing_indices = set()
     new_indices = set()
@@ -166,15 +187,18 @@ def update_tracker(tracker:dict, bounding_box:list)->dict:
             break
 
         track_id = existing_ids[existing_index]
-        centroids[track_id] = new_points[new_index]; lost[track_id] = 0
-        existing_indices.add(existing_index); new_indices.add(new_index)
+        centroids[track_id] = new_points[new_index]
+        lost[track_id] = 0
+        existing_indices.add(existing_index)
+        new_indices.add(new_index)
 
     # Mark unmatched existing tracks as lost and remove if lost for too long
     for existing_index, track_id in enumerate(existing_ids):
         if existing_index not in existing_indices:
             lost[track_id] += 1
             if lost[track_id] > MAX_LOST:
-                del centroids[track_id]; del lost[track_id]
+                del centroids[track_id]
+                del lost[track_id]
 
     for new_index, point in enumerate(new_points):
         if new_index not in new_indices:
@@ -187,15 +211,15 @@ def update_tracker(tracker:dict, bounding_box:list)->dict:
     return centroids_dict
 
 
-def initialize_tripwire(first_line:int, second_line:int, dist_m:float)->dict:
+def initialize_tripwire(first_line: int, second_line: int, dist_m: float) -> dict:
     """
     Initialize a new tripwire state dictionary for calculating vehicle speed.
-    
+
     Args:
         first_line (int): The y-coordinate of the first tripwire line to cross.
         second_line (int): The y-coordinate of the second tripwire line to cross.
         dist_m (float): The actual real-world distance between the lines in meters.
-        
+
     Returns:
         tripwire (dict): A dictionary tracking previous y-coords, crossings, and speeds.
     """
@@ -211,15 +235,15 @@ def initialize_tripwire(first_line:int, second_line:int, dist_m:float)->dict:
     return tripwire
 
 
-def crossed_line_check(prev_y:float, cur_y:float, line_y:int)->bool:
+def crossed_line_check(prev_y: float, cur_y: float, line_y: int) -> bool:
     """
     Check if a line was crossed between the previous and current frame.
-    
+
     Args:
         prev_y (float): The tracked object's previous bounding box bottom y-coordinate.
         cur_y (float): The tracked object's current bounding box bottom y-coordinate.
         line_y (int): The y-coordinate of the tripwire line.
-        
+
     Returns:
         crossed_line (bool): True if the object crossed the line, False otherwise.
     """
@@ -228,10 +252,10 @@ def crossed_line_check(prev_y:float, cur_y:float, line_y:int)->bool:
     return crossed_line
 
 
-def update_tripwire(tripwire:dict, tracked_vehicles:dict, current_frame:int)->None:
+def update_tripwire(tripwire: dict, tracked_vehicles: dict, current_frame: int) -> None:
     """
     Update the tripwire state and calculate speeds for vehicles crossing both lines.
-    
+
     Args:
         tripwire (dict): The tripwire state dictionary.
         tracked_vehicles (dict): The active tracked vehicles (track ID -> (x, y)).
@@ -253,32 +277,42 @@ def update_tripwire(tripwire:dict, tracked_vehicles:dict, current_frame:int)->No
                     tripwire["speed"][track_id] = (tripwire["dist_m"] / elapsed) * 3.6
 
 
-
 # ----- Main Script Logic ----------
 
-def main():
+
+def main(
+    video_path: str = VIDEO_PATH,
+    output_path: str = OUTPUT_PATH,
+    csv_path: str = CSV_PATH,
+) -> None:
     """
     Main function to execute the traffic tracking_speed monitoring pipeline.
-    
-    This function handles video loading, MOG2 background subtraction, vehicle tracking 
+
+    This function handles video loading, MOG2 background subtraction, vehicle tracking
     across two divided carriageways, tracking_speed calculation (via tripwires and BEV fallback),
     output video annotation, and results export to a CSV file.
     """
     # read the goddamn video
-    capture_video = cv2.VideoCapture(VIDEO_PATH)
+    capture_video = cv2.VideoCapture(video_path)
     if not capture_video.isOpened():
-        raise FileNotFoundError(f"Cannot open: {VIDEO_PATH}")
+        raise FileNotFoundError(f"Cannot open: {video_path}")
 
     frame_width = int(capture_video.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(capture_video.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(capture_video.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    # (DISABLED) print video stats, maybe a moving id can be assigned here and passed to the csv for tracking
-    # print(f"Video: {VIDEO_PATH}  |  {frame_width}x{frame_height}  |  {total_frames} frames")
+    # Extract segment ID from filename (e.g. "..._part_1.mp4" -> "000")
+    part_match = re.search(r"_part_(\d+)", os.path.basename(video_path))
+    segment_id = f"{int(part_match.group(1)):03d}" if part_match else "000"
 
-    background  = cv2.createBackgroundSubtractorMOG2(history=150, varThreshold=40, detectShadows=True)
+    # (DISABLED) print video stats, maybe a moving id can be assigned here and passed to the csv for tracking
+    # print(f"Video: {video_path}  |  {frame_width}x{frame_height}  |  {total_frames} frames")
+
+    background = cv2.createBackgroundSubtractorMOG2(
+        history=150, varThreshold=40, detectShadows=True
+    )
     # reduce noise for better tracking
-    kernel_small  = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     kernel_medium = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
     kernel_large = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
 
@@ -289,13 +323,16 @@ def main():
     tripwire_left = initialize_tripwire(LINE_2_Y, LINE_1_Y, DIST_L)
     tripwire_right = initialize_tripwire(LINE_1_Y, LINE_2_Y, DIST_R)
 
-    vehicle_type = {}   # "car" // "truck"
-    bev_hist  = defaultdict(lambda: deque(maxlen=BEV_WINDOW))
+    vehicle_type = {}  # "car" // "truck"
+    bev_hist = defaultdict(lambda: deque(maxlen=BEV_WINDOW))
     bev_speed = {}
+    entry_frame = {}  # (side, track_id) -> first frame the vehicle was tracked
 
     # Set up video writer for annotated output
     video_codec = cv2.VideoWriter_fourcc(*"mp4v")
-    video_writer = cv2.VideoWriter(OUTPUT_PATH, video_codec, FPS, (frame_width, frame_height))
+    video_writer = cv2.VideoWriter(
+        output_path, video_codec, FPS, (frame_width, frame_height)
+    )
 
     # Process each frame
     for frame_id in range(1, total_frames + 1):
@@ -311,15 +348,29 @@ def main():
         foreground = cv2.dilate(foreground, kernel_large)
 
         # Detections Split by carriageway
-        centroids, _ = cv2.findContours(foreground, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        centroids, _ = cv2.findContours(
+            foreground, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
 
-        all_bounding_rect = [cv2.boundingRect(c) for c in centroids if cv2.contourArea(c) >= MIN_AREA]
-        rects_left   = [r for r in all_bounding_rect if (r[0] + r[2] // 2) < SPLIT_X]
-        rects_right   = [r for r in all_bounding_rect if (r[0] + r[2] // 2) >= SPLIT_X]
+        all_bounding_rect = [
+            cv2.boundingRect(c) for c in centroids if cv2.contourArea(c) >= MIN_AREA
+        ]
+        rects_left = [r for r in all_bounding_rect if (r[0] + r[2] // 2) < SPLIT_X]
+        rects_right = [r for r in all_bounding_rect if (r[0] + r[2] // 2) >= SPLIT_X]
 
         # Update trackers and tripwires
         active_left = update_tracker(tracker_left, rects_left)
         active_right = update_tracker(tracker_right, rects_right)
+
+        # Record entry frame for newly seen track IDs
+        for tracker_id in active_left:
+            key = ("L", tracker_id)
+            if key not in entry_frame:
+                entry_frame[key] = frame_id
+        for tracker_id in active_right:
+            key = ("R", tracker_id)
+            if key not in entry_frame:
+                entry_frame[key] = frame_id
 
         update_tripwire(tripwire_left, active_left, frame_id)
         update_tripwire(tripwire_right, active_right, frame_id)
@@ -333,14 +384,23 @@ def main():
             for tracker_id, (current_position_x, current_position_y) in active.items():
                 key = (side, tracker_id)
                 bev_perspective = cv2.perspectiveTransform(
-                    np.array([[
-                        [float(current_position_x), float(current_position_y)]
-                    ]], dtype=np.float32), matrix_side)[0, 0]
-                bev_hist[key].append((float(bev_perspective[0]), float(bev_perspective[1])))
+                    np.array(
+                        [[[float(current_position_x), float(current_position_y)]]],
+                        dtype=np.float32,
+                    ),
+                    matrix_side,
+                )[0, 0]
+                bev_hist[key].append(
+                    (float(bev_perspective[0]), float(bev_perspective[1]))
+                )
                 h_pts = list(bev_hist[key])
                 if len(h_pts) >= BEV_MIN_FRAMES:
                     diffs = [
-                        ((h_pts[i+1][0]-h_pts[i][0])**2 + (h_pts[i+1][1]-h_pts[i][1])**2)**0.5
+                        (
+                            (h_pts[i + 1][0] - h_pts[i][0]) ** 2
+                            + (h_pts[i + 1][1] - h_pts[i][1]) ** 2
+                        )
+                        ** 0.5
                         for i in range(len(h_pts) - 1)
                     ]
                     tracking_speed = float(np.median(diffs)) * FPS * 3.6
@@ -349,35 +409,30 @@ def main():
 
                 # Classify vehicle type from the closest bounding box (using bottom-center)
                 if rects_side:
-                    rect = min(rects_side,
-                               key=lambda r: abs(current_position_x - (r[0] + r[2] // 2)) + abs(current_position_y - (r[1] + r[3])))
-                    vehicle_type[key] = "truck" if rect[2] * rect[3] >= TRUCK_MIN_AREA else "car"
+                    rect = min(
+                        rects_side,
+                        key=lambda r: abs(current_position_x - (r[0] + r[2] // 2))
+                        + abs(current_position_y - (r[1] + r[3])),
+                    )
+                    vehicle_type[key] = (
+                        "truck" if rect[2] * rect[3] >= TRUCK_MIN_AREA else "car"
+                    )
 
         # Annotate frame
         annotated_frame = frame.copy()
 
         # Draw the first tripwire line
-        cv2.line(annotated_frame,
-                 (340, LINE_1_Y),
-                 (940, LINE_1_Y),
-                 (0, 255, 0),
-                 2)
+        cv2.line(annotated_frame, (340, LINE_1_Y), (940, LINE_1_Y), (0, 255, 0), 2)
         # Draw the second tripwire line
-        cv2.line(annotated_frame,
-                 (100, LINE_2_Y),
-                 (1180, LINE_2_Y),
-                 (0, 255, 0),
-                 2)
+        cv2.line(annotated_frame, (100, LINE_2_Y), (1180, LINE_2_Y), (0, 255, 0), 2)
         # Draw the vertical divider line
-        cv2.line(annotated_frame,
-                 (SPLIT_X, 0),
-                 (SPLIT_X, frame_height),
-                 (80, 80, 80),
-                 1)  # divider guide
+        cv2.line(
+            annotated_frame, (SPLIT_X, 0), (SPLIT_X, frame_height), (80, 80, 80), 1
+        )  # divider guide
 
         # Annotate each active track with its ID, type, and tracking_speed (from tripwire or BEV)
         for side, active, tripwire, rects_side, color in [
-            ("L", active_left, tripwire_left, rects_left, (0, 200, 255)),   # orange
+            ("L", active_left, tripwire_left, rects_left, (0, 200, 255)),  # orange
             ("R", active_right, tripwire_right, rects_right, (255, 180, 0)),  # blue
         ]:
             # Only annotate if the current position is between the tripwire lines to avoid clutter and misannotations
@@ -387,11 +442,14 @@ def main():
                 key = (side, tracker_id)
                 if not rects_side:
                     continue
-                rect = min(rects_side,
-                           key=lambda r: abs(current_position_x - (r[0] + r[2] // 2)) + abs(current_position_y - (r[1] + r[3])))
+                rect = min(
+                    rects_side,
+                    key=lambda r: abs(current_position_x - (r[0] + r[2] // 2))
+                    + abs(current_position_y - (r[1] + r[3])),
+                )
                 rect_x, rect_y, rect_w, rect_h = rect
                 speed_tripwire = tripwire["speed"].get(tracker_id)
-                speed_bev  = bev_speed.get(key)
+                speed_bev = bev_speed.get(key)
                 if speed_tripwire is not None:
                     speed_label = f"{int(speed_tripwire)} km/h"
                 elif speed_bev is not None:
@@ -399,13 +457,27 @@ def main():
                 else:
                     # we can later input the average tracking_speed of the video here if we want to give some indication of tracking_speed even when it can't be calculated
                     speed_label = "--"
-                vehicle_label    = vehicle_type.get(key, "car").upper()
+                vehicle_label = vehicle_type.get(key, "car").upper()
                 row = f"{vehicle_label} {side}{tracker_id}  {speed_label}"
 
                 # Draw bounding box and label for the track
-                cv2.rectangle(annotated_frame, (rect_x, rect_y), (rect_x + rect_w, rect_y + rect_h), color, 2)
-                cv2.putText(annotated_frame, row, (rect_x, max(rect_y - 6, 12)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+                cv2.rectangle(
+                    annotated_frame,
+                    (rect_x, rect_y),
+                    (rect_x + rect_w, rect_y + rect_h),
+                    color,
+                    2,
+                )
+                cv2.putText(
+                    annotated_frame,
+                    row,
+                    (rect_x, max(rect_y - 6, 12)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    color,
+                    1,
+                    cv2.LINE_AA,
+                )
 
         video_writer.write(annotated_frame)
 
@@ -418,12 +490,26 @@ def main():
     video_writer.release()
 
     # CSV export // alerts must be while processing the script.
-    with open(CSV_PATH, "w", newline="") as f:
+    with open(csv_path, "w", newline="") as f:
         wr = csv.writer(f)
-        wr.writerow(["vehicle_id", "carriageway", "vehicle_type", "speed_kmh", "speed_source"])
+        wr.writerow(
+            [
+                "vehicle_id",
+                "carriageway",
+                "vehicle_type",
+                "speed_kmh",
+                "speed_source",
+                "entry_timestamp_s",
+                "entry_frame",
+                "total_frames",
+                "segment_id",
+            ]
+        )
         # Combine the tripwire and BEV tracking_speed data and include all seen tracker IDs from both sources and vehicle type classifications.
-        for side, tripwire, side_label in [("L", tripwire_left, "left"),
-                                           ("R", tripwire_right, "right")]:
+        for side, tripwire, side_label in [
+            ("L", tripwire_left, "left"),
+            ("R", tripwire_right, "right"),
+        ]:
             # union ids
             seen_track_ids = (
                 set(tripwire["speed"])
@@ -432,22 +518,31 @@ def main():
             )
             # Sort by tracker ID for consistent output
             for tracker_id in sorted(seen_track_ids):
-                key      = (side, tracker_id)
+                key = (side, tracker_id)
                 speed_tripwire = tripwire["speed"].get(tracker_id)
-                speed_bev  = bev_speed.get(key)
+                speed_bev = bev_speed.get(key)
                 if speed_tripwire is not None:
                     tracking_speed, tracking_source = speed_tripwire, "tripwire"
                 elif speed_bev is not None:
                     tracking_speed, tracking_source = speed_bev, "bev_avg"
                 else:
                     tracking_speed, tracking_source = None, "none"
-                wr.writerow([
-                    f"{side}{tracker_id}", side_label,
-                    vehicle_type.get(key, "unknown"),
-                    f"{tracking_speed:.1f}" if tracking_speed is not None else "",
-                    tracking_source,
-                ])
-
+                # get entry frame timestamp in seconds
+                entry_ts = entry_frame.get(key)
+                # write csv
+                wr.writerow(
+                    [
+                        f"{side}{tracker_id}",
+                        side_label,
+                        vehicle_type.get(key, "unknown"),
+                        f"{tracking_speed:.1f}" if tracking_speed is not None else "",
+                        tracking_source,
+                        f"{entry_ts / FPS:.2f}" if entry_ts is not None else "",
+                        entry_ts if entry_ts is not None else "",
+                        total_frames,
+                        segment_id,
+                    ]
+                )
 
     # (DISABLED) Summary output - for testing purposes, we can print some summary stats here about the number of vehicles tracked via tripwire vs BEV fallback vs no tracking_speed.
     # n_trip = sum(len(tw["speed"]) for tw in (tripwire_left, tripwire_right))
@@ -461,7 +556,7 @@ def main():
     #         | set(vehicle_type) | set(bev_speed)
     # )
 
-    # print(f"\nDone.  Output: {OUTPUT_PATH}  |  CSV: {CSV_PATH}")
+    # print(f"\nDone.  Output: {output_path}  |  CSV: {csv_path}")
     # print(f"  Tripwire speeds : {n_trip}")
     # print(f"  BEV fallback    : {n_bev}")
     # print(f"  No tracking_speed        : {len(all_seen) - n_trip - n_bev}")
@@ -469,5 +564,16 @@ def main():
 
 if __name__ == "__main__":
     t0 = time.time()
-    main()
+
+    segments_input = os.listdir(VIDEO_PATH)
+
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        for segment in segments_input:
+            video_path = os.path.join(VIDEO_PATH, segment)
+            output_path = os.path.join(OUTPUT_PATH, f"processed_{segment}")
+            csv_path = os.path.join(
+                CSV_PATH, f"vehicle_speeds_{os.path.splitext(segment)[0]}.csv"
+            )
+            executor.submit(main, video_path, output_path, csv_path)
+
     print(f"Total time: {time.time() - t0:.1f} s")
