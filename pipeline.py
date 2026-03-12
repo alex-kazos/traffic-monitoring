@@ -7,6 +7,8 @@ import logging
 import numpy as np
 import cv2  # type: ignore[import-untyped]
 from collections import defaultdict, deque
+import pyodbc
+
 
 from config import (
     FPS,
@@ -23,6 +25,7 @@ from config import (
     LINE_2_Y,
     PERSPECT_L,
     PERSPECT_R,
+    connection_string
 )
 
 
@@ -221,35 +224,62 @@ def run_pipeline(video_path: str, csv_path: str) -> None:
 
     capture_video.release()
 
-    with open(csv_path, "w", newline="") as f:
-        wr = csv.writer(f)
-        # column names
-        wr.writerow(["vehicle_id", "carriageway", "vehicle_type", "speed_kmh", "speed_source"])
-        for side, tripwire, side_label in [
-            ("L", tripwire_left, "left"),
-            ("R", tripwire_right, "right"),
-        ]:
-            seen_track_ids = (
-                set(tripwire["speed"])
-                | {tracker_id for (s, tracker_id) in vehicle_type if s == side}
-                | {tracker_id for (s, tracker_id) in bev_speed if s == side}
-            )
-            for tracker_id in sorted(seen_track_ids):
-                key = (side, tracker_id)
-                speed_tripwire = tripwire["speed"].get(tracker_id)
-                speed_bev = bev_speed.get(key)
-                if speed_tripwire is not None:
-                    tracking_speed, tracking_source = speed_tripwire, "tripwire"
-                elif speed_bev is not None:
-                    tracking_speed, tracking_source = speed_bev, "bev_avg"
-                else:
-                    tracking_speed, tracking_source = None, "none"
-                wr.writerow([
-                    f"{side}{tracker_id}", # vehicle_id
-                    side_label, # carriageway
-                    vehicle_type.get(key, "unknown"), # vehicle_type
-                    f"{tracking_speed:.1f}" if tracking_speed is not None else "", # speed_kmh
-                    tracking_source, # speed_source
-                ])
+    conn = pyodbc.connect(connection_string)
+    cursor = conn.cursor()
 
-    logging.info("Wrote CSV: %s", os.path.abspath(csv_path))
+    cursor.execute("""
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'vehicle_speeds')
+    BEGIN
+        CREATE TABLE vehicle_speeds (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            vehicle_id VARCHAR(100) NOT NULL,
+            carriageway VARCHAR(200) NOT NULL,
+            vehicle_type VARCHAR(200) NOT NULL,
+            speed_kmh FLOAT NULL,
+            speed_source VARCHAR(200) NOT NULL
+        );
+    END
+    """)
+    conn.commit()
+
+    # column names: "vehicle_id", "carriageway", "vehicle_type", "speed_kmh", "speed_source"
+    for side, tripwire, side_label in [
+        ("L", tripwire_left, "left"),
+        ("R", tripwire_right, "right"),
+    ]:
+        seen_track_ids = (
+            set(tripwire["speed"])
+            | {tracker_id for (s, tracker_id) in vehicle_type if s == side}
+            | {tracker_id for (s, tracker_id) in bev_speed if s == side}
+        )
+        for tracker_id in sorted(seen_track_ids):
+            key = (side, tracker_id)
+            speed_tripwire = tripwire["speed"].get(tracker_id)
+            speed_bev = bev_speed.get(key)
+            if speed_tripwire is not None:
+                tracking_speed, tracking_source = speed_tripwire, "tripwire"
+            elif speed_bev is not None:
+                tracking_speed, tracking_source = speed_bev, "bev_avg"
+            else:
+                tracking_speed, tracking_source = None, "none"
+
+            vehicle_id = f"{side}{tracker_id}"
+            cursor.execute(
+                """
+                INSERT INTO vehicle_speeds (vehicle_id, carriageway, vehicle_type, speed_kmh, speed_source)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    vehicle_id,
+                    side_label,
+                    vehicle_type.get(key, "unknown"),
+                    float(tracking_speed) if tracking_speed is not None else None,
+                    tracking_source,
+                ),
+            )
+
+    conn.commit()
+    logging.info("Inserted vehicle speeds to database")
+    cursor.close()
+    conn.close()
+    logging.info("Closed database connection")

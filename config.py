@@ -16,6 +16,17 @@ AZURE_SQL_DATABASE_NAME = os.environ.get("AZURE_SQL_DATABASE_NAME")
 AZURE_SQL_USER_NAME = os.environ.get("AZURE_SQL_USER_NAME")
 AZURE_SQL_PASSWORD = os.environ.get("AZURE_SQL_PASSWORD")
 
+connection_string = (
+    "DRIVER={ODBC Driver 18 for SQL Server};"
+    f"SERVER={AZURE_SQL_SERVER_NAME};"
+    f"DATABASE={AZURE_SQL_DATABASE_NAME};"
+    f"UID={AZURE_SQL_USER_NAME};"
+    f"PWD={AZURE_SQL_PASSWORD};"
+    "Encrypt=yes;"
+    "TrustServerCertificate=no;"
+    "Connection Timeout=30;"
+)
+
 # ----- Local fallback -----
 VIDEO_PATH = os.path.join(
     "../Downloads", "Segments",
