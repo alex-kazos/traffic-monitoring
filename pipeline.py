@@ -258,6 +258,18 @@ def run_pipeline(video_path: str, csv_path: str) -> None:
             total_frames INT NOT NULL,
             segment_id INT NOT NULL
         );
+
+            CREATE TABLE vehicle_speeds_alerts (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            vehicle_id VARCHAR(100) NOT NULL,
+            carriageway VARCHAR(200) NOT NULL,
+            vehicle_type VARCHAR(200) NOT NULL,
+            speed_kmh FLOAT NULL,
+            speed_source VARCHAR(200) NULL,
+            entry_frame INT NOT NULL,
+            total_frames INT NOT NULL,
+            segment_id INT NOT NULL
+        );
     END
     """)
     conn.commit()
@@ -282,13 +294,15 @@ def run_pipeline(video_path: str, csv_path: str) -> None:
                 tracking_speed, tracking_source = speed_bev, "bev_avg"
             else:
                 tracking_speed, tracking_source = None, "none"
-            entry_ts = entry_frame.get(key)
+            entry_frame_val = entry_frame.get(key, 0)
 
             vehicle_id = f"{side}{tracker_id}"
+
+            # Insert data to the database
             cursor.execute(
                 """
-                INSERT INTO vehicle_speeds (vehicle_id, carriageway, vehicle_type, speed_kmh, speed_source,entry_ts,total_frames,segment_id)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO vehicle_speeds (vehicle_id, carriageway, vehicle_type, speed_kmh, speed_source, entry_frame, total_frames, segment_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     vehicle_id,
@@ -296,9 +310,30 @@ def run_pipeline(video_path: str, csv_path: str) -> None:
                     vehicle_type.get(key, "unknown"),
                     float(tracking_speed) if tracking_speed is not None else None,
                     tracking_source,
+                    entry_frame_val,
+                    total_frames,
+                    segment_id,
                 ),
             )
-
+            # Insert data to the alerts table
+            if tracking_speed is not None:
+                if tracking_speed > 130:
+                    cursor.execute(
+                        """
+                        INSERT INTO vehicle_speeds_alerts (vehicle_id, carriageway, vehicle_type, speed_kmh, speed_source, entry_frame, total_frames, segment_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            vehicle_id,
+                            side_label,
+                            vehicle_type.get(key, "unknown"),
+                            float(tracking_speed),
+                            tracking_source,
+                            entry_frame_val,
+                            total_frames,
+                            segment_id,
+                        ),
+                    )
     conn.commit()
     logging.info("Inserted vehicle speeds to database")
     cursor.close()
