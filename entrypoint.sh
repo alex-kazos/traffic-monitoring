@@ -14,23 +14,9 @@ echo "Downloading video from Blob Storage..."
 curl -L "$INPUT_VIDEO_URL" -o "$INPUT_VIDEO"
 echo "Video downloaded successfully."
 
-echo "Running video preprocessing..."
+echo "Running video preprocessing (split, upload per clip, Event Hub per clip)..."
+export VIDEO_ID=road_traffic
 python3 app.py "$INPUT_VIDEO" "$OUTPUT_DIR"
 echo "Video preprocessing completed successfully."
-
-TOKEN=$(echo "${OUTPUT_CONTAINER_URL}" | awk -F'?' '{print $2}')
-OUTPUT_CONTAINER_URL=$(echo "${OUTPUT_CONTAINER_URL}" | awk -F'?' '{print $1}')
-VIDEO_ID=road_traffic
-
-for file in "$OUTPUT_DIR"/*; do
-    filename=$(basename "$file")
-    echo "Uploading $filename to Blob Storage..."
-
-    curl --fail -X PUT \
-         -H "x-ms-blob-type: BlockBlob" \
-         -H "Content-Type: video/mp4" \
-         -T "$file" \
-         "$OUTPUT_CONTAINER_URL/$VIDEO_ID/$filename?${TOKEN}"
-done
 
 echo "Ending preprocessing container..."
