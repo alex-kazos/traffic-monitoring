@@ -43,7 +43,7 @@ for file in "$OUTPUT_DIR"/*; do
 
     # Only for .mp4 files: print "uploaded filename" and send that message to Event Hubs (skip for manifest.json etc.).
     if [[ "$filename" == *.mp4 ]]; then
-        echo "uploaded ${filename}"
+        echo "uploaded sending event for s${filename}"
         python3 /app/send_event.py "${filename}"
         # If send_event.py fails (e.g. Event Hubs unreachable), the script stops because of set -e.
     fi
