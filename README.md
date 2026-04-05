@@ -40,6 +40,25 @@ python monitor_traffic.py
 python monitor_traffic_supervision.py
 ```
 
+## Interactive Dashboard
+
+An interactive Plotly dashboard is available at `Dashboard/app.py` for time-based speed analysis.
+
+It includes:
+- Average speed trends by `carriageway` and `vehicle_type`
+- A time slider to inspect 5-minute bins
+- Alerts table for vehicles over `130 km/h`
+
+Run it with:
+
+```bash
+pip install -r Dashboard/requirements.txt
+python Dashboard/app.py
+```
+
+Then open the local URL printed by Dash (usually `http://127.0.0.1:8050`).
+
+
 ### Generated Artifacts
 
 Every successful run creates:
