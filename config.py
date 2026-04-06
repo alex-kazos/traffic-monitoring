@@ -5,6 +5,13 @@ import os
 import numpy as np
 import cv2  # type: ignore[import-untyped]
 
+EVENT_HUB_CONNECTION_STR = os.getenv("EVENT_HUB_CONNECTION_STR", "")
+EVENT_HUB_NAME = os.getenv("EVENT_HUB_NAME", "")
+CONSUMER_GROUP = os.getenv("CONSUMER_GROUP", "$Default")
+
+CHECKPOINT_STORAGE_CONN_STR = os.getenv("CHECKPOINT_STORAGE_CONN_STR", "")
+CHECKPOINT_CONTAINER_NAME = os.getenv("CHECKPOINT_CONTAINER_NAME", "eventhub-checkpoints")
+
 # ----- Azure Blob Storage -----
 AZURE_STORAGE_CONNECTION_STRING = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
 AZURE_STORAGE_CONTAINER_NAME = os.environ.get("AZURE_STORAGE_CONTAINER_NAME", "").strip()
