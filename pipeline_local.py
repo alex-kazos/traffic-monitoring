@@ -2,15 +2,15 @@
 Traffic speed monitoring algorithm: detection, tracking, tripwire speed, BEV fallback, CSV export.
 """
 import os
-import csv
 import logging
+import sqlite3
 import numpy as np
 import cv2  # type: ignore[import-untyped]
 from collections import defaultdict, deque
 import pyodbc
 import re
 
-from config import (
+from config_local import (
     FPS,
     MIN_AREA,
     TRUCK_MIN_AREA,
@@ -25,7 +25,9 @@ from config import (
     LINE_2_Y,
     PERSPECT_L,
     PERSPECT_R,
-    connection_string
+    connection_string,
+    DB_BACKEND,
+    SQLITE_DB_PATH,
 )
 
 
@@ -145,17 +147,102 @@ def update_tripwire(tripwire: dict, tracked_vehicles: dict, current_frame: int) 
                     tripwire["speed"][track_id] = (tripwire["dist_m"] / elapsed) * 3.6
 
 
-def parse_segment_id(video_path: str, csv_path: str) -> int:
-    """Extract segment id from video file name, fallback to csv file name."""
-    candidates = [os.path.basename(video_path), os.path.basename(csv_path)]
+def parse_segment_id(source_name: str | None, video_path: str) -> int:
+    """Use original blob/local source name first, then local path, to find _part_###."""
+    candidates = []
+    if source_name:
+        candidates.append(os.path.basename(source_name))
+    candidates.append(os.path.basename(video_path))
+
     for candidate in candidates:
-        part_match = re.search(r"_part_(\d+)", candidate)
-        if part_match:
-            return int(part_match.group(1))
+        match = re.search(r"_part_(\d+)", candidate)
+        if match:
+            return int(match.group(1))
     return 0
 
 
-def run_pipeline(video_path: str, csv_path: str) -> None:
+def get_db_connection():
+    """Open DB connection based on selected backend."""
+    if DB_BACKEND == "sqlite":
+        parent = os.path.dirname(SQLITE_DB_PATH)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        return sqlite3.connect(SQLITE_DB_PATH), "sqlite"
+    return pyodbc.connect(connection_string), "mssql"
+
+
+def ensure_tables(cursor, backend: str) -> None:
+    if backend == "sqlite":
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vehicle_speeds (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vehicle_id TEXT NOT NULL,
+                carriageway TEXT NOT NULL,
+                vehicle_type TEXT NOT NULL,
+                speed_kmh REAL NULL,
+                speed_source TEXT NULL,
+                entry_frame INTEGER NOT NULL,
+                total_frames INTEGER NOT NULL,
+                segment_id INTEGER NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vehicle_speeds_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vehicle_id TEXT NOT NULL,
+                carriageway TEXT NOT NULL,
+                vehicle_type TEXT NOT NULL,
+                speed_kmh REAL NULL,
+                speed_source TEXT NULL,
+                entry_frame INTEGER NOT NULL,
+                total_frames INTEGER NOT NULL,
+                segment_id INTEGER NOT NULL
+            )
+            """
+        )
+        return
+
+    cursor.execute(
+        """
+        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'vehicle_speeds')
+        BEGIN
+            CREATE TABLE vehicle_speeds (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                vehicle_id VARCHAR(100) NOT NULL,
+                carriageway VARCHAR(200) NOT NULL,
+                vehicle_type VARCHAR(200) NOT NULL,
+                speed_kmh FLOAT NULL,
+                speed_source VARCHAR(200) NULL,
+                entry_frame INT NOT NULL,
+                total_frames INT NOT NULL,
+                segment_id INT NOT NULL
+            );
+
+            CREATE TABLE vehicle_speeds_alerts (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                vehicle_id VARCHAR(100) NOT NULL,
+                carriageway VARCHAR(200) NOT NULL,
+                vehicle_type VARCHAR(200) NOT NULL,
+                speed_kmh FLOAT NULL,
+                speed_source VARCHAR(200) NULL,
+                entry_frame INT NOT NULL,
+                total_frames INT NOT NULL,
+                segment_id INT NOT NULL
+            );
+        END
+        """
+    )
+
+
+def run_pipeline(
+    video_path: str,
+    csv_path: str,
+    source_name: str | None = None,
+    debug_partition_id: int | None = None,
+) -> None:
     """
     Run the traffic speed pipeline on one video: detect, track, compute speeds, write CSV.
     """
@@ -169,12 +256,13 @@ def run_pipeline(video_path: str, csv_path: str) -> None:
     total_frames = int(capture_video.get(cv2.CAP_PROP_FRAME_COUNT))
     logging.info("Video %s: %dx%d, %d frames", video_path, frame_width, frame_height, total_frames)
 
-    segment_id = parse_segment_id(video_path=video_path, csv_path=csv_path)
+    segment_id = parse_segment_id(source_name=source_name, video_path=video_path)
     logging.info(
-        "Segment parse (cloud): video=%s csv=%s segment_id=%s",
+        "Segment parse -> source=%s local=%s segment_id=%s partition=%s",
+        source_name or "<none>",
         os.path.basename(video_path),
-        os.path.basename(csv_path),
         segment_id,
+        debug_partition_id if debug_partition_id is not None else "<none>",
     )
 
     background = cv2.createBackgroundSubtractorMOG2(history=150, varThreshold=40, detectShadows=True)
@@ -253,40 +341,13 @@ def run_pipeline(video_path: str, csv_path: str) -> None:
 
     capture_video.release()
 
-    conn = pyodbc.connect(connection_string)
+    conn, backend = get_db_connection()
     cursor = conn.cursor()
-
-    ## Comment: added null to speed_source, if speed is nullable, speed_source should be nullable too.
-    cursor.execute("""
-    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'vehicle_speeds')
-    BEGIN
-        CREATE TABLE vehicle_speeds (
-            id INT IDENTITY(1,1) PRIMARY KEY,
-            vehicle_id VARCHAR(100) NOT NULL,
-            carriageway VARCHAR(200) NOT NULL,
-            vehicle_type VARCHAR(200) NOT NULL,
-            speed_kmh FLOAT NULL,
-            speed_source VARCHAR(200) NULL,
-            entry_frame INT NOT NULL,
-            total_frames INT NOT NULL,
-            segment_id INT NOT NULL
-        );
-
-            CREATE TABLE vehicle_speeds_alerts (
-            id INT IDENTITY(1,1) PRIMARY KEY,
-            vehicle_id VARCHAR(100) NOT NULL,
-            carriageway VARCHAR(200) NOT NULL,
-            vehicle_type VARCHAR(200) NOT NULL,
-            speed_kmh FLOAT NULL,
-            speed_source VARCHAR(200) NULL,
-            entry_frame INT NOT NULL,
-            total_frames INT NOT NULL,
-            segment_id INT NOT NULL
-        );
-    END
-    """)
+    ensure_tables(cursor, backend)
     conn.commit()
 
+    inserted_rows = 0
+    inserted_alert_rows = 0
     # column names: "vehicle_id", "carriageway", "vehicle_type", "speed_kmh", "speed_source"
     for side, tripwire, side_label in [
         ("L", tripwire_left, "left"),
@@ -296,6 +357,12 @@ def run_pipeline(video_path: str, csv_path: str) -> None:
             set(tripwire["speed"])
             | {tracker_id for (s, tracker_id) in vehicle_type if s == side}
             | {tracker_id for (s, tracker_id) in bev_speed if s == side}
+        )
+        logging.info(
+            "Insert candidates -> segment_id=%s side=%s count=%s",
+            segment_id,
+            side_label,
+            len(seen_track_ids),
         )
         for tracker_id in sorted(seen_track_ids):
             key = (side, tracker_id)
@@ -328,6 +395,7 @@ def run_pipeline(video_path: str, csv_path: str) -> None:
                     segment_id,
                 ),
             )
+            inserted_rows += 1
             # Insert data to the alerts table
             if tracking_speed is not None:
                 if tracking_speed > 130:
@@ -347,8 +415,16 @@ def run_pipeline(video_path: str, csv_path: str) -> None:
                             segment_id,
                         ),
                     )
+                    inserted_alert_rows += 1
     conn.commit()
-    logging.info("Inserted vehicle speeds to database")
+    logging.info(
+        "Inserted rows -> segment_id=%s vehicle_speeds=%s alerts=%s backend=%s db=%s",
+        segment_id,
+        inserted_rows,
+        inserted_alert_rows,
+        backend,
+        SQLITE_DB_PATH if backend == "sqlite" else "azure-sql",
+    )
     cursor.close()
     conn.close() ## yes this will run as many times as the number of videos in the blob storage. It can be optimized to run only once.
     logging.info("Closed database connection")

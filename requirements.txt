@@ -4,3 +4,4 @@ azure-storage-blob>=12.19.0
 pyodbc
 azure-eventhub
 azure-eventhub-checkpointstoreblob
+azure-core
