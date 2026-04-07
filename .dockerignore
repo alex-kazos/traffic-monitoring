@@ -1,0 +1,19 @@
+# Local IDE and environment files
+.idea/
+.vscode/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+.DS_Store
+
+# Standalone apps and local-only assets
+Dashboard/
+
+# Local config overrides
+config_local.py
+
+# Database files
+*.sql
