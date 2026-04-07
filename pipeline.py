@@ -145,6 +145,16 @@ def update_tripwire(tripwire: dict, tracked_vehicles: dict, current_frame: int) 
                     tripwire["speed"][track_id] = (tripwire["dist_m"] / elapsed) * 3.6
 
 
+def parse_segment_id(video_path: str, csv_path: str) -> int:
+    """Extract segment id from video file name, fallback to csv file name."""
+    candidates = [os.path.basename(video_path), os.path.basename(csv_path)]
+    for candidate in candidates:
+        part_match = re.search(r"_part_(\d+)", candidate)
+        if part_match:
+            return int(part_match.group(1))
+    return 0
+
+
 def run_pipeline(video_path: str, csv_path: str) -> None:
     """
     Run the traffic speed pipeline on one video: detect, track, compute speeds, write CSV.
@@ -159,10 +169,13 @@ def run_pipeline(video_path: str, csv_path: str) -> None:
     total_frames = int(capture_video.get(cv2.CAP_PROP_FRAME_COUNT))
     logging.info("Video %s: %dx%d, %d frames", video_path, frame_width, frame_height, total_frames)
 
-    # Extract segment ID
-    part_match = re.search(r"_part_(\d+)", os.path.basename(video_path))
-    segment_id = f"{int(part_match.group(1)):03d}" if part_match else "000"
-    segment_id = int(segment_id)
+    segment_id = parse_segment_id(video_path=video_path, csv_path=csv_path)
+    logging.info(
+        "Segment parse (cloud): video=%s csv=%s segment_id=%s",
+        os.path.basename(video_path),
+        os.path.basename(csv_path),
+        segment_id,
+    )
 
     background = cv2.createBackgroundSubtractorMOG2(history=150, varThreshold=40, detectShadows=True)
     kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
