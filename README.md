@@ -30,6 +30,12 @@ To build the project's Docker containers for the `Split` and `Tracking` environm
 
 The docker image is at: https://hub.docker.com/r/giorgoskalesiakis/traffic-monitoring/tags
 
+## Dashboard
+
+The Plotly dashboard in `Dashboard/app.py` now loads its data directly from SQL Server. 
+Before starting it, please make sure that you've your environment variables set up correctly to connect to the database.:
+If the dashboard cannot connect, it will open with an on-screen status message instead.
+
 ## Usage
 
 Simply execute the target monitoring script you wish to evaluate. It will load the defined video paths, compute telemetry on every frame, and push reports dynamically.
