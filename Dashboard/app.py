@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import math
 from pathlib import Path
+from typing import cast
 
 import pandas as pd
 import plotly.express as px
@@ -10,14 +10,43 @@ from dash import Dash, Input, Output, dash_table, dcc, html
 from data_pipeline import ALERT_THRESHOLD_KMH, BIN_SECONDS, build_alerts, load_vehicle_data
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-RAW_DF = load_vehicle_data(PROJECT_ROOT)
+EXPECTED_COLUMNS = [
+	"segment_id",
+	"total_frames",
+	"entry_frame",
+	"speed_kmh",
+	"carriageway",
+	"vehicle_type",
+	"vehicle_id",
+	"segment_sort_key",
+	"frames_before_segment",
+	"absolute_frame",
+	"timestamp_seconds",
+	"timestamp_minutes",
+	"bin_idx",
+	"time_bin",
+]
+
+
+def _empty_vehicle_frame() -> pd.DataFrame:
+	return pd.DataFrame(columns=EXPECTED_COLUMNS)
+
+
+def _load_dashboard_data() -> tuple[pd.DataFrame, str | None]:
+	try:
+		return load_vehicle_data(PROJECT_ROOT), None
+	except Exception as exc:
+		return _empty_vehicle_frame(), f"SQL data could not be loaded: {exc}"
+
+
+RAW_DF, DATA_STATUS_MESSAGE = _load_dashboard_data()
 
 CARRIAGEWAYS = sorted(RAW_DF["carriageway"].dropna().astype(str).unique())
 VEHICLE_TYPES = sorted(RAW_DF["vehicle_type"].dropna().astype(str).unique())
 BIN_MINUTES = BIN_SECONDS // 60
 MIN_BIN_START_MINUTE = 0
-MAX_BIN_START_MINUTE = int((RAW_DF["timestamp_seconds"].max() // BIN_SECONDS) * BIN_MINUTES)
-MAX_BIN_END_MINUTE = MAX_BIN_START_MINUTE + BIN_MINUTES
+MAX_BIN_START_MINUTE = int((RAW_DF["timestamp_seconds"].max() // BIN_SECONDS) * BIN_MINUTES) if not RAW_DF.empty else BIN_MINUTES
+MAX_BIN_END_MINUTE = max(MIN_BIN_START_MINUTE + BIN_MINUTES, MAX_BIN_START_MINUTE + BIN_MINUTES)
 
 
 def _bin_label(bin_start_minute: int) -> str:
@@ -37,6 +66,10 @@ app.layout = html.Div(
 	[
 		html.H2("Traffic Speed Dashboard"),
 		html.P("Move the slider to inspect average speed and over-speed alerts across time."),
+		html.Div(
+			DATA_STATUS_MESSAGE,
+			style={"marginBottom": "12px", "padding": "10px 12px", "borderRadius": "6px", "backgroundColor": "#fff4ce", "color": "#5c3b00"},
+		) if DATA_STATUS_MESSAGE else html.Div(),
 		html.Div(
 			[
 				html.Label("Carriageway"),
@@ -113,8 +146,8 @@ def update_dashboard(selected_range: list[int], selected_carriageways: list[str]
 	else:
 		start_minute, end_minute = sorted(int(value) for value in selected_range)
 
-	selected_carriageways = selected_carriageways or CARRIAGEWAYS
-	selected_vehicle_types = selected_vehicle_types or VEHICLE_TYPES
+	selected_carriageways = cast(list[str], selected_carriageways or CARRIAGEWAYS)
+	selected_vehicle_types = cast(list[str], selected_vehicle_types or VEHICLE_TYPES)
 	if end_minute <= start_minute:
 		end_minute = start_minute + BIN_MINUTES
 

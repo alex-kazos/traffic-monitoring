@@ -1,28 +1,25 @@
 from __future__ import annotations
 
+import importlib.util
+import os
+import re
 from pathlib import Path
-import glob
-from typing import Iterable
+from typing import Any, Iterable
 
 import pandas as pd
 
 FPS = 25.0
 BIN_SECONDS = 300
 ALERT_THRESHOLD_KMH = 130.0
-
-
-def discover_csv_files(project_root: Path) -> list[Path]:
-    patterns = [
-        project_root / "Downloads" / "Data" / "vehicle_speeds_*.csv",
-        project_root / "Downloads" / "DATA" / "vehicle_speeds_*.csv",
-    ]
-
-    files: set[Path] = set()
-    for pattern in patterns:
-        for file_path in glob.glob(str(pattern)):
-            files.add(Path(file_path).resolve())
-
-    return sorted(files)
+_REQUIRED_COLUMNS = {
+    "segment_id",
+    "total_frames",
+    "entry_frame",
+    "speed_kmh",
+    "carriageway",
+    "vehicle_type",
+    "vehicle_id",
+}
 
 
 def _coerce_numeric(df: pd.DataFrame, columns: Iterable[str]) -> pd.DataFrame:
@@ -37,17 +34,175 @@ def _segment_sort_key(series: pd.Series) -> pd.Series:
     return pd.to_numeric(extracted, errors="coerce").fillna(0).astype(int)
 
 
+def _validate_identifier(name: str, label: str) -> str:
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+        raise ValueError(f"Invalid SQL {label}: {name!r}")
+    return name
+
+
+def _normalize_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _get_installed_sql_server_drivers() -> list[str]:
+    try:
+        import pyodbc  # type: ignore[import-not-found]
+    except ImportError:
+        return []
+
+    return [driver for driver in pyodbc.drivers() if "sql server" in driver.lower()]
+
+
+def _extract_driver(connection_string: str) -> str:
+    match = re.search(r"DRIVER\s*=\s*\{?([^;{}]+)}?", connection_string, flags=re.IGNORECASE)
+    return _normalize_text(match.group(1)) if match else ""
+
+
+def _replace_driver(connection_string: str, new_driver: str) -> str:
+    replacement = f"DRIVER={{{new_driver}}}"
+    if re.search(r"DRIVER\s*=", connection_string, flags=re.IGNORECASE):
+        return re.sub(r"DRIVER\s*=\s*\{?[^;{}]+}?", replacement, connection_string, flags=re.IGNORECASE)
+    return f"{replacement};{connection_string}"
+
+
+def _strip_connection_attributes(connection_string: str, attributes: list[str]) -> str:
+    updated = connection_string
+    for attribute in attributes:
+        updated = re.sub(rf"{re.escape(attribute)}\s*=\s*[^;]*;?", "", updated, flags=re.IGNORECASE)
+    return updated
+
+
+def _resolve_sql_driver(preferred_driver: str) -> str:
+    installed = _get_installed_sql_server_drivers()
+    if not installed:
+        return preferred_driver
+
+    normalized = {item.lower(): item for item in installed}
+    if preferred_driver.lower() in normalized:
+        return normalized[preferred_driver.lower()]
+
+    for candidate in ["ODBC Driver 18 for SQL Server", "ODBC Driver 17 for SQL Server", "SQL Server"]:
+        if candidate.lower() in normalized:
+            return normalized[candidate.lower()]
+
+    return installed[0]
+
+
+def _normalize_connection_string_driver(connection_string: str, preferred_driver: str) -> str:
+    resolved_driver = _resolve_sql_driver(preferred_driver)
+    current_driver = _extract_driver(connection_string)
+    normalized = connection_string
+    if not current_driver or current_driver.lower() != resolved_driver.lower():
+        normalized = _replace_driver(connection_string, resolved_driver)
+
+    if resolved_driver.lower() == "sql server":
+        normalized = _strip_connection_attributes(normalized, ["Encrypt", "TrustServerCertificate", "Connection Timeout"])
+    return normalized
+
+
+def _load_config_local(project_root: Path) -> dict[str, Any]:
+    config_path = project_root / "config_local.py"
+    if not config_path.exists():
+        return {}
+
+    spec = importlib.util.spec_from_file_location("dashboard_config_local", str(config_path))
+    if spec is None or spec.loader is None:
+        return {}
+
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        return {}
+
+    return {
+        "connection_string": getattr(module, "connection_string", ""),
+        "server": getattr(module, "AZURE_SQL_SERVER_NAME", ""),
+        "database": getattr(module, "AZURE_SQL_DATABASE_NAME", ""),
+        "username": getattr(module, "AZURE_SQL_USER_NAME", ""),
+        "password": getattr(module, "AZURE_SQL_PASSWORD", ""),
+    }
+
+
+def _build_connection_string(project_root: Path) -> str:
+
+    server = _normalize_text(os.getenv("AZURE_SQL_SERVER_NAME", ""))
+    database = _normalize_text(os.getenv("AZURE_SQL_DATABASE_NAME", ""))
+    username = _normalize_text(os.getenv("AZURE_SQL_USER_NAME", ""))
+    password = _normalize_text(os.getenv("AZURE_SQL_PASSWORD", ""))
+
+    if not (server and database and username and password):
+        config_local = _load_config_local(project_root)
+        direct = _normalize_text(config_local.get("connection_string", ""))
+        if direct:
+            preferred_driver = _normalize_text(os.getenv("AZURE_SQL_DRIVER", "ODBC Driver 18 for SQL Server"))
+            return _normalize_connection_string_driver(direct, preferred_driver)
+
+        server = server or _normalize_text(config_local.get("server", ""))
+        database = database or _normalize_text(config_local.get("database", ""))
+        username = username or _normalize_text(config_local.get("username", ""))
+        password = password or _normalize_text(config_local.get("password", ""))
+
+    missing = [
+        key
+        for key, value in {
+            "AZURE_SQL_SERVER_NAME": server,
+            "AZURE_SQL_DATABASE_NAME": database,
+            "AZURE_SQL_USER_NAME": username,
+            "AZURE_SQL_PASSWORD": password,
+        }.items()
+        if not value
+    ]
+
+    driver = _resolve_sql_driver(_normalize_text(os.getenv("AZURE_SQL_DRIVER", "ODBC Driver 18 for SQL Server")))
+    encrypt = _normalize_text(os.getenv("AZURE_SQL_ENCRYPT", "yes"))
+    trust_cert = _normalize_text(os.getenv("AZURE_SQL_TRUST_SERVER_CERTIFICATE", "no"))
+    timeout = _normalize_text(os.getenv("AZURE_SQL_CONNECTION_TIMEOUT", "30"))
+
+    connection_string = (
+        f"DRIVER={{{driver}}};"
+        f"SERVER={server};"
+        f"DATABASE={database};"
+        f"UID={username};"
+        f"PWD={password};"
+        f"Encrypt={encrypt};"
+        f"TrustServerCertificate={trust_cert};"
+        f"Connection Timeout={timeout};"
+    )
+    if driver.lower() == "sql server":
+        connection_string = _strip_connection_attributes(connection_string, ["Encrypt", "TrustServerCertificate", "Connection Timeout"])
+    return connection_string
+
+
+def _load_from_sql_server(project_root: Path) -> pd.DataFrame:
+    try:
+        import pyodbc  # type: ignore[import-not-found]
+    except ImportError as exc:  # pragma: no cover
+        raise ImportError("pyodbc is required to load dashboard data from SQL Server.") from exc
+
+    schema = _validate_identifier(os.getenv("TRAFFIC_SQL_SCHEMA", "dbo").strip(), "schema")
+    table = _validate_identifier(os.getenv("TRAFFIC_SQL_TABLE", "vehicle_speeds").strip(), "table")
+
+    query = (
+        "SELECT "
+        "segment_id, total_frames, entry_frame, speed_kmh, carriageway, vehicle_type, vehicle_id "
+        f"FROM {schema}.{table};"
+    )
+
+    connection_string = _build_connection_string(project_root)
+    with pyodbc.connect(connection_string) as conn:
+        return pd.read_sql_query(query, conn)
+
+
 def load_vehicle_data(project_root: Path) -> pd.DataFrame:
-    files = discover_csv_files(project_root)
-    if not files:
-        raise FileNotFoundError("No vehicle_speeds_*.csv files found under Downloads/Data or Downloads/DATA.")
+    df = _load_from_sql_server(project_root)
 
-    df = pd.concat((pd.read_csv(str(file)) for file in files), ignore_index=True)
     if df.empty:
-        raise ValueError("CSV files were found but no rows were loaded.")
+        raise ValueError("SQL query returned no rows from vehicle speed data.")
 
-    required_columns = {"segment_id", "total_frames", "entry_frame", "speed_kmh", "carriageway", "vehicle_type", "vehicle_id"}
-    missing = required_columns.difference(df.columns)
+    missing = _REQUIRED_COLUMNS.difference(df.columns)
     if missing:
         raise ValueError(f"Missing required columns: {sorted(missing)}")
 

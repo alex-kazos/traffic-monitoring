@@ -11,3 +11,4 @@ Downloads/*
 
 .idea
 venv/
+Dashboard/.env
